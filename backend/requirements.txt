@@ -1,0 +1,12 @@
+fastapi 
+uvicorn[standard] 
+python-multipart 
+pydantic 
+websockets 
+numpy 
+soundfile 
+torch 
+transformers 
+accelerate 
+sentencepiece 
+requests 1
