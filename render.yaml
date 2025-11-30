@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: leakwhisperer-backend
+    env: python
+    plan: free
+    region: frankfurt
+    buildCommand: |
+      pip install --upgrade pip
+      pip install -r backend/requirements.txt
+    startCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /
+    autoDeploy: true
+    disk:
+      name: hf-cache
+      mountPath: /opt/render/project/hf-cache
+      sizeGB: 1
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.8
+      - key: HF_HOME
+        value: /opt/render/project/hf-cache
+      - key: TRANSFORMERS_CACHE
+        value: /opt/render/project/hf-cache

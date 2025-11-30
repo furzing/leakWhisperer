@@ -81,9 +81,30 @@ def analyze_leak(audio_b64: str) -> Tuple[bool, float, str]:
     keywords = ("hiss", "leak", "water", "flow", "pipe", "pressure")
     keyword_hit = any(word in transcript_lower for word in keywords)
     keyword_score = 0.8 if keyword_hit else min(0.4, len(transcript_lower) / 80)
-    rms = float(np.sqrt(np.mean(np.square(audio)))) if audio.size else 0.0
-    normalized_energy = min(1.0, rms * 5)
-    leak_score = min(1.0, 0.6 * normalized_energy + 0.4 * keyword_score)
+    
+    # Compute high-frequency energy ratio (800-4000 Hz) as described in idea.md
+    # This is more accurate for detecting leak hissing sounds
+    # Use FFT to analyze frequency spectrum
+    fft = np.fft.rfft(audio)
+    power_spectrum = np.abs(fft) ** 2
+    frequencies = np.fft.rfftfreq(len(audio), 1.0 / TARGET_SAMPLE_RATE)
+    
+    # High-frequency range for leak detection (800-4000 Hz)
+    high_freq_mask = (frequencies >= 800) & (frequencies <= 4000)
+    
+    high_freq_energy = np.sum(power_spectrum[high_freq_mask])
+    total_energy = np.sum(power_spectrum)
+    
+    # High-frequency energy ratio - leaks have more energy in high frequencies
+    if total_energy > 0:
+        high_freq_ratio = high_freq_energy / total_energy
+    else:
+        high_freq_ratio = 0.0
+    
+    # Normalize the ratio (typical leaks: 0.3-0.6, normal: <0.2)
+    normalized_hf_ratio = min(1.0, high_freq_ratio * 2.0)
+    
+    leak_score = min(1.0, 0.6 * normalized_hf_ratio + 0.4 * keyword_score)
     is_leak = leak_score >= 0.55
     return is_leak, round(leak_score, 3), transcript
 
