@@ -4,10 +4,6 @@ python-multipart==0.0.9
 pydantic==2.7.1
 websockets==12.0
 numpy==1.26.4
-soundfile==0.12.1
-torch==2.1.0
-transformers==4.39.3
-accelerate==0.28.0
-sentencepiece==0.2.0
+httpx==0.27.0
 requests==2.32.3
 

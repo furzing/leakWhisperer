@@ -1,6 +1,6 @@
 # LeakWhisperer API Documentation
 
-Complete API reference for frontend integration with the LeakWhisperer backend.
+Complete API reference for frontend integration with the LeakWhisperer backend. Audio transcription is executed via the free HuggingFace Inference API (Whisper Tiny), so production deployments should set the `HF_API_TOKEN` environment variable to avoid rate limits.
 
 ## Base URL
 

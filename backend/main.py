@@ -1,11 +1,12 @@
+import os
 import random
 import time
 from typing import Any, Dict, List, Tuple
 
+import httpx
 import numpy as np
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from transformers import pipeline
 import uvicorn
 
 from backend.utils import REAL_LOCATIONS, base64_to_audio, resample_audio
@@ -25,17 +26,12 @@ meters_db: Dict[str, Dict[str, Any]] = {}
 active_websockets: List[WebSocket] = []
 
 TARGET_SAMPLE_RATE = 16_000
-PIPELINE_MODEL_ID = "openai/whisper-tiny"
-speech_pipeline = None
-
-try:
-    speech_pipeline = pipeline(
-        "automatic-speech-recognition",
-        model=PIPELINE_MODEL_ID,
-    )
-except Exception as exc:  # pragma: no cover - startup diagnostic
-    speech_pipeline = None
-    print(f"[LeakWhisperer] Whisper pipeline unavailable: {exc}")
+HF_API_URL = os.getenv(
+    "HF_API_URL",
+    "https://api-inference.huggingface.co/models/openai/whisper-tiny",
+)
+HF_API_TOKEN = os.getenv("HF_API_TOKEN")
+HF_API_TIMEOUT = float(os.getenv("HF_API_TIMEOUT", "45"))
 
 # Initialize 1000 meters with real Amman locations
 for i in range(1000):
@@ -54,29 +50,47 @@ for i in range(1000):
         "transcript": "",
     }
 
-def ensure_asr_pipeline():
-    global speech_pipeline
-    if speech_pipeline is None:
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                "Whisper pipeline not initialized yet. "
-                "Install transformers/torch and restart the server."
-            ),
-        )
-    return speech_pipeline
+async def transcribe_audio(audio_bytes: bytes) -> str:
+    if not HF_API_URL:
+        raise HTTPException(500, detail="HF_API_URL not configured")
 
-def analyze_leak(audio_b64: str) -> Tuple[bool, float, str]:
-    pipe = ensure_asr_pipeline()
-    audio, sr = base64_to_audio(audio_b64)
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": "audio/wav",
+    }
+    if HF_API_TOKEN:
+        headers["Authorization"] = f"Bearer {HF_API_TOKEN}"
+
+    async with httpx.AsyncClient(timeout=HF_API_TIMEOUT) as client:
+        response = await client.post(HF_API_URL, headers=headers, content=audio_bytes)
+
+    if response.status_code == 503:
+        raise HTTPException(503, detail="ASR model warming up on HuggingFace; retry shortly.")
+    if response.status_code == 401:
+        raise HTTPException(
+            502,
+            detail="Unauthorized by HuggingFace Inference API. Set HF_API_TOKEN env var.",
+        )
+    if response.status_code >= 400:
+        raise HTTPException(502, detail=f"HuggingFace ASR error: {response.text}")
+
+    payload = response.json()
+    if isinstance(payload, dict) and payload.get("error"):
+        raise HTTPException(503, detail=f"ASR unavailable: {payload['error']}")
+
+    if isinstance(payload, list):
+        transcript = payload[0].get("text", "") if payload else ""
+    else:
+        transcript = payload.get("text", "")
+    return transcript.strip()
+
+
+async def analyze_leak(audio_b64: str) -> Tuple[bool, float, str]:
+    audio, sr, audio_bytes = base64_to_audio(audio_b64)
     if audio.ndim > 1:
         audio = audio.mean(axis=1)
     audio = resample_audio(audio, sr, TARGET_SAMPLE_RATE)
-    result = pipe(
-        audio,
-        return_timestamps=False,
-    )
-    transcript = result.get("text", "").strip()
+    transcript = await transcribe_audio(audio_bytes)
     transcript_lower = transcript.lower()
     keywords = ("hiss", "leak", "water", "flow", "pipe", "pressure")
     keyword_hit = any(word in transcript_lower for word in keywords)
@@ -158,7 +172,7 @@ async def root():
 async def upload_audio(data: dict):
     meter_id = data["meter_id"]
     audio_b64 = data["audio_base64"]
-    is_leak, confidence, transcript = analyze_leak(audio_b64)
+    is_leak, confidence, transcript = await analyze_leak(audio_b64)
     flow_rate = estimate_flow(confidence) if is_leak else 0
     severity = compute_severity(flow_rate)
 

@@ -13,7 +13,3 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.8
-      - key: HF_HOME
-        value: /opt/render/project/src/hf-cache
-      - key: TRANSFORMERS_CACHE
-        value: /opt/render/project/src/hf-cache

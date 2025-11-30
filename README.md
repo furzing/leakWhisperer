@@ -1,6 +1,6 @@
 # LeakWhisperer
 
-FastAPI backend that ingests smart meter audio, runs Whisper Tiny leak inference, maintains 1000 virtual meters in-memory, and streams real-time alarms over REST + WebSockets. The `frontend/` folder is a placeholder for the React dashboard your teammate will wire up.
+FastAPI backend that ingests smart meter audio, uses the free HuggingFace Inference API (Whisper Tiny) for speech-to-text, maintains 1000 virtual meters in-memory, and streams real-time alarms over REST + WebSockets. The `frontend/` folder is a placeholder for the React dashboard your teammate will wire up.
 
 ## Repo layout
 - `backend/` - FastAPI app (`backend/main.py`), utilities, mock meter generator, deployment artifacts
@@ -14,6 +14,11 @@ FastAPI backend that ingests smart meter audio, runs Whisper Tiny leak inference
 4. `uvicorn backend.main:app --host 0.0.0.0 --port 8000`
 5. (Optional) run `python backend/mock_generator.py` from another shell to stream fake leaks into the API
 
+## Environment variables
+- `HF_API_TOKEN` - **recommended**. Use a free HuggingFace token so calls to `openai/whisper-tiny` are authorized. Set locally via `$env:HF_API_TOKEN="hf_xxx"` or add it as a secret in Render after the blueprint is created.
+- `HF_API_URL` - override the default HuggingFace model endpoint if you deploy your own Space/Inference Endpoint.
+- `HF_API_TIMEOUT` - seconds before the backend times out waiting for HuggingFace (default `45`).
+
 ## Deploying to Render (free plan friendly)
 Render automatically picks up `render.yaml`, so deployment is self-service and works on the free tier:
 
@@ -21,17 +26,15 @@ Render automatically picks up `render.yaml`, so deployment is self-service and w
 2. In Render, create **New +** -> **Blueprint** and point it to the repo.
 3. On the first deploy Render provisions the `leakwhisperer-backend` web service defined in `render.yaml`:
    - Installs Python 3.11 and `backend/requirements.txt`
-   - Sets `HF_HOME`/`TRANSFORMERS_CACHE` to `/opt/render/project/src/hf-cache` (inside the container) so Whisper weights reuse the same directory between restarts
    - Starts the API via `uvicorn backend.main:app --host 0.0.0.0 --port $PORT`
    - Exposes health check `GET /`
+   - After the initial build, add the `HF_API_TOKEN` env var in Render so HuggingFace accepts requests
 4. Subsequent pushes to the default branch trigger auto-deploys; toggle `autoDeploy` off in Render UI if you want to control rollouts manually.
 
-> Free instances do not support persistent disks, so the Whisper cache is ephemeral. Render will re-download the model on each fresh deploy, but restarts of the same instance reuse the cached weights.
-
 ### Environment and performance tips
-- Stick with the `free` plan in `render.yaml`; upgrade later if you need more RAM/CPU for faster Whisper inference.
+- Stick with the `free` plan in `render.yaml`; Whisper work now happens on HuggingFace's infrastructure so the dyno only handles lightweight logic.
 - Keep the default region (`frankfurt`) or change it to whatever region is closest to your target users.
-- If you need to bypass loading Whisper (for a demo without CPU headroom) temporarily set `PIPELINE_MODEL_ID` in `backend/main.py` to a lighter model ID and redeploy.
+- If HuggingFace throttles you, slow down the mock generator or point `HF_API_URL` to your own hosted Space.
 
 ## Frontend integration checklist
 Your teammate only needs the deployed base URL (for example `https://leakwhisperer-backend.onrender.com`). The important API surfaces are:

@@ -1,8 +1,9 @@
-import numpy as np
-import soundfile as sf
 import base64
 import random
+import wave
 from io import BytesIO
+
+import numpy as np
 
 # Real Amman / Zarqa coordinates + street names (100 real locations, repeated for 1000 meters)
 REAL_LOCATIONS = [
@@ -38,16 +39,34 @@ def generate_leak_sound(duration=10, sr=16000):
     signal = np.clip(signal, -1, 1)
     return (signal * 32767).astype(np.int16)
 
-def audio_to_base64(audio_int16, sr=16000):
+def audio_to_base64(audio_int16: np.ndarray, sr: int = 16000) -> str:
+    """Encode mono int16 PCM samples into a base64 WAV string."""
     buffer = BytesIO()
-    sf.write(buffer, audio_int16, samplerate=sr, format='WAV')
+    with wave.open(buffer, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(sr)
+        wf.writeframes(audio_int16.tobytes())
     return base64.b64encode(buffer.getvalue()).decode()
 
-def base64_to_audio(b64_str):
+
+def base64_to_audio(b64_str: str):
+    """Decode base64 WAV into float32 samples, sample rate, and raw WAV bytes."""
     audio_bytes = base64.b64decode(b64_str)
     buffer = BytesIO(audio_bytes)
-    audio, sr = sf.read(buffer)
-    return audio.astype(np.float32), sr
+    with wave.open(buffer, "rb") as wf:
+        sr = wf.getframerate()
+        sample_width = wf.getsampwidth()
+        channels = wf.getnchannels()
+        frames = wf.readframes(wf.getnframes())
+
+    if sample_width != 2:
+        raise ValueError("Only 16-bit PCM WAV payloads are supported")
+
+    audio = np.frombuffer(frames, dtype=np.int16).astype(np.float32) / 32768.0
+    if channels > 1:
+        audio = audio.reshape(-1, channels)
+    return audio, sr, audio_bytes
 
 def resample_audio(audio, source_sr, target_sr=16000):
     if source_sr == target_sr:
