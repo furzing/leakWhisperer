@@ -10,14 +10,10 @@ services:
     startCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /
     autoDeploy: true
-    disk:
-      name: hf-cache
-      mountPath: /opt/render/project/hf-cache
-      sizeGB: 1
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.8
       - key: HF_HOME
-        value: /opt/render/project/hf-cache
+        value: /opt/render/project/src/hf-cache
       - key: TRANSFORMERS_CACHE
-        value: /opt/render/project/hf-cache
+        value: /opt/render/project/src/hf-cache

@@ -14,20 +14,22 @@ FastAPI backend that ingests smart meter audio, runs Whisper Tiny leak inference
 4. `uvicorn backend.main:app --host 0.0.0.0 --port 8000`
 5. (Optional) run `python backend/mock_generator.py` from another shell to stream fake leaks into the API
 
-## Deploying to Render
-Render automatically picks up `render.yaml`, so deployment is self-service:
+## Deploying to Render (free plan friendly)
+Render automatically picks up `render.yaml`, so deployment is self-service and works on the free tier:
 
 1. Push this repo to GitHub or GitLab.
 2. In Render, create **New +** -> **Blueprint** and point it to the repo.
 3. On the first deploy Render provisions the `leakwhisperer-backend` web service defined in `render.yaml`:
    - Installs Python 3.11 and `backend/requirements.txt`
-   - Allocates a persistent disk (`hf-cache`) mounted at `/opt/render/project/hf-cache` so Whisper weights stay cached between restarts
+   - Sets `HF_HOME`/`TRANSFORMERS_CACHE` to `/opt/render/project/src/hf-cache` (inside the container) so Whisper weights reuse the same directory between restarts
    - Starts the API via `uvicorn backend.main:app --host 0.0.0.0 --port $PORT`
    - Exposes health check `GET /`
 4. Subsequent pushes to the default branch trigger auto-deploys; toggle `autoDeploy` off in Render UI if you want to control rollouts manually.
 
+> Free instances do not support persistent disks, so the Whisper cache is ephemeral. Render will re-download the model on each fresh deploy, but restarts of the same instance reuse the cached weights.
+
 ### Environment and performance tips
-- The free plan is enough for demos; upgrade the plan in `render.yaml` if you hit memory ceilings while running Whisper.
+- Stick with the `free` plan in `render.yaml`; upgrade later if you need more RAM/CPU for faster Whisper inference.
 - Keep the default region (`frankfurt`) or change it to whatever region is closest to your target users.
 - If you need to bypass loading Whisper (for a demo without CPU headroom) temporarily set `PIPELINE_MODEL_ID` in `backend/main.py` to a lighter model ID and redeploy.
 
