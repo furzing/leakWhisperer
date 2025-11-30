@@ -1,6 +1,9 @@
+import asyncio
+import logging
 import os
 import random
 import time
+from contextlib import suppress
 from typing import Any, Dict, List, Tuple
 
 import httpx
@@ -9,9 +12,18 @@ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 
-from backend.utils import REAL_LOCATIONS, base64_to_audio, resample_audio
+from backend.utils import (
+    REAL_LOCATIONS,
+    audio_to_base64,
+    base64_to_audio,
+    generate_leak_sound,
+    generate_normal_sound,
+    resample_audio,
+)
 
 app = FastAPI(title="LeakWhisperer Backend")
+app.state.sim_task = None
+logger = logging.getLogger("leakwhisperer")
 
 app.add_middleware(
     CORSMiddleware,
@@ -32,6 +44,11 @@ HF_API_URL = os.getenv(
 )
 HF_API_TOKEN = os.getenv("HF_API_TOKEN")
 HF_API_TIMEOUT = float(os.getenv("HF_API_TIMEOUT", "45"))
+
+SIMULATE_METERS = os.getenv("SIMULATE_METERS", "true").lower() == "true"
+SIM_BATCH_SIZE = int(os.getenv("SIM_BATCH_SIZE", "3"))
+SIM_SLEEP_SECONDS = float(os.getenv("SIM_SLEEP_SECONDS", "2.5"))
+SIM_LEAK_CHANCE = float(os.getenv("SIM_LEAK_CHANCE", "0.015"))
 
 # Initialize 1000 meters with real Amman locations
 for i in range(1000):
@@ -122,6 +139,36 @@ async def analyze_leak(audio_b64: str) -> Tuple[bool, float, str]:
     is_leak = leak_score >= 0.55
     return is_leak, round(leak_score, 3), transcript
 
+
+async def process_meter_audio(meter_id: str, audio_b64: str):
+    if meter_id not in meters_db:
+        raise HTTPException(404, detail=f"Meter {meter_id} not found")
+
+    is_leak, confidence, transcript = await analyze_leak(audio_b64)
+    flow_rate = estimate_flow(confidence) if is_leak else 0
+    severity = compute_severity(flow_rate)
+
+    meters_db[meter_id].update(
+        {
+            "status": "leak" if is_leak else "normal",
+            "last_update": time.time(),
+            "flow_rate_lph": flow_rate,
+            "confidence": confidence,
+            "audio_base64": audio_b64,
+            "severity": severity,
+            "transcript": transcript,
+        }
+    )
+
+    if is_leak:
+        await broadcast_leak(meters_db[meter_id])
+
+    return {
+        **meters_db[meter_id],
+        "is_leak": is_leak,
+        "severity": severity,
+    }
+
 def estimate_flow(confidence: float) -> int:
     base = 350
     max_flow = 2200
@@ -172,28 +219,7 @@ async def root():
 async def upload_audio(data: dict):
     meter_id = data["meter_id"]
     audio_b64 = data["audio_base64"]
-    is_leak, confidence, transcript = await analyze_leak(audio_b64)
-    flow_rate = estimate_flow(confidence) if is_leak else 0
-    severity = compute_severity(flow_rate)
-
-    meters_db[meter_id].update({
-        "status": "leak" if is_leak else "normal",
-        "last_update": time.time(),
-        "flow_rate_lph": flow_rate,
-        "confidence": confidence,
-        "audio_base64": audio_b64,
-        "severity": severity,
-        "transcript": transcript,
-    })
-
-    if is_leak:
-        await broadcast_leak(meters_db[meter_id])
-
-    return {
-        **meters_db[meter_id],
-        "is_leak": is_leak,
-        "severity": severity
-    }
+    return await process_meter_audio(meter_id, audio_b64)
 
 @app.get("/meters")
 async def get_meters():
@@ -223,6 +249,47 @@ async def websocket_endpoint(websocket: WebSocket):
             await websocket.receive_text()  # keep alive
     except WebSocketDisconnect:
         active_websockets.remove(websocket)
+
+
+async def simulate_meter_stream():
+    meter_ids = list(meters_db.keys())
+    logger.info(
+        "Meter simulator enabled | batch=%s sleep=%ss leak_chance=%.3f",
+        SIM_BATCH_SIZE,
+        SIM_SLEEP_SECONDS,
+        SIM_LEAK_CHANCE,
+    )
+    while True:
+        try:
+            for _ in range(SIM_BATCH_SIZE):
+                meter_id = random.choice(meter_ids)
+                leak_mode = random.random() < SIM_LEAK_CHANCE
+                audio_int16 = generate_leak_sound() if leak_mode else generate_normal_sound()
+                audio_b64 = audio_to_base64(audio_int16)
+                try:
+                    await process_meter_audio(meter_id, audio_b64)
+                except HTTPException as http_exc:
+                    logger.warning("Simulator error for %s: %s", meter_id, http_exc.detail)
+                except Exception as exc:
+                    logger.warning("Simulator unexpected error for %s: %s", meter_id, exc)
+            await asyncio.sleep(SIM_SLEEP_SECONDS)
+        except asyncio.CancelledError:
+            logger.info("Meter simulator stopped")
+            raise
+
+
+@app.on_event("startup")
+async def startup_events():
+    if SIMULATE_METERS:
+        app.state.sim_task = asyncio.create_task(simulate_meter_stream())
+
+
+@app.on_event("shutdown")
+async def shutdown_events():
+    if app.state.sim_task:
+        app.state.sim_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await app.state.sim_task
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

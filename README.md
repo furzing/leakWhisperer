@@ -1,6 +1,6 @@
 # LeakWhisperer
 
-FastAPI backend that ingests smart meter audio, uses the free HuggingFace Inference API (Whisper Tiny) for speech-to-text, maintains 1000 virtual meters in-memory, and streams real-time alarms over REST + WebSockets. The `frontend/` folder is a placeholder for the React dashboard your teammate will wire up.
+FastAPI backend that ingests smart meter audio, uses the free HuggingFace Inference API (Whisper Tiny) for speech-to-text, maintains 1000 virtual meters in-memory, auto-simulates their hourly uploads, and streams real-time alarms over REST + WebSockets. The `frontend/` folder is a placeholder for the React dashboard your teammate will wire up.
 
 ## Repo layout
 - `backend/` - FastAPI app (`backend/main.py`), utilities, mock meter generator, deployment artifacts
@@ -18,6 +18,10 @@ FastAPI backend that ingests smart meter audio, uses the free HuggingFace Infere
 - `HF_API_TOKEN` - **recommended**. Use a free HuggingFace token so calls to `openai/whisper-tiny` are authorized. Set locally via `$env:HF_API_TOKEN="hf_xxx"` or add it as a secret in Render after the blueprint is created.
 - `HF_API_URL` - override the default HuggingFace model endpoint if you deploy your own Space/Inference Endpoint.
 - `HF_API_TIMEOUT` - seconds before the backend times out waiting for HuggingFace (default `45`).
+- `SIMULATE_METERS` - `true` by default. Toggle the built-in virtual meter simulator off (set to `false`) if you plan to push data from a separate process.
+- `SIM_BATCH_SIZE` - number of meters processed per simulator batch (default `3`).
+- `SIM_SLEEP_SECONDS` - delay between simulator batches (default `2.5`).
+- `SIM_LEAK_CHANCE` - probability that a simulated clip is a leak (default `0.015`, roughly 1.5%).
 
 ## Deploying to Render (free plan friendly)
 Render automatically picks up `render.yaml`, so deployment is self-service and works on the free tier:
@@ -34,7 +38,8 @@ Render automatically picks up `render.yaml`, so deployment is self-service and w
 ### Environment and performance tips
 - Stick with the `free` plan in `render.yaml`; Whisper work now happens on HuggingFace's infrastructure so the dyno only handles lightweight logic.
 - Keep the default region (`frankfurt`) or change it to whatever region is closest to your target users.
-- If HuggingFace throttles you, slow down the mock generator or point `HF_API_URL` to your own hosted Space.
+- Tune the simulator vars if you need faster/slower leak traffic. Smaller `SIM_BATCH_SIZE` or larger `SIM_SLEEP_SECONDS` reduces the number of HuggingFace calls per minute.
+- If HuggingFace throttles you, slow the simulator, disable it and run `backend/mock_generator.py` locally, or point `HF_API_URL` to your own hosted Space.
 
 ## Frontend integration checklist
 Your teammate only needs the deployed base URL (for example `https://leakwhisperer-backend.onrender.com`). The important API surfaces are:
